@@ -21,8 +21,10 @@ This script lets you simply provide a list of resource addresses, and it handles
 
 All operations happen locally. The remote backends are only touched at the very end when you explicitly confirm.
 
+Works with any Terraform-supported backend — GitLab, S3, GCS, Azure Blob, Terraform Cloud, and others.
+
 ```
-GitLab (source backend)          GitLab (target backend)
+Remote backend (source)          Remote backend (target)
         │                                  │
         │  state pull                      │  state pull
         ▼                                  ▼
@@ -33,7 +35,7 @@ GitLab (source backend)          GitLab (target backend)
         │                                  │
         │  state push                      │  state push
         ▼                                  ▼
-GitLab (source — resources gone) GitLab (target — resources added)
+source backend (resources gone)  target backend (resources added)
 ```
 
 ---
@@ -44,8 +46,9 @@ You must do these two things manually before running the script:
 
 **1. Set up the target Terraform root**
 
-Add a backend block to your target module's `main.tf` (or equivalent) pointing to a new GitLab state address:
+Add a backend block to your target module pointing to a new state. The tool works with any Terraform-supported backend. Examples:
 
+**GitLab:**
 ```hcl
 terraform {
   backend "http" {
@@ -55,6 +58,17 @@ terraform {
     lock_method    = "POST"
     unlock_method  = "DELETE"
     retry_wait_min = "5"
+  }
+}
+```
+
+**S3:**
+```hcl
+terraform {
+  backend "s3" {
+    bucket = "my-terraform-state"
+    key    = "new-root/terraform.tfstate"
+    region = "us-east-1"
   }
 }
 ```

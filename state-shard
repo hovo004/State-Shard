@@ -1,0 +1,431 @@
+#!/usr/bin/env bash
+
+# =============================================================================
+# state-shard — Move terraform remote state resources to a specified remote backed, using local state management
+# =============================================================================
+# Usage:
+#   state-shard \
+#     -s /path/to/source/terraform \
+#     -t /path/to/target/terraform \
+#     -r /path/to/resources.txt \
+#     [-n /path/to/new_names.txt]
+#
+# -s  SOURCE Terraform root — the existing root whose state we are splitting
+# -t  TARGET Terraform root — the new root with backend block already configured
+#
+# -r  Resources file (required): one OLD resource address per line.
+#     These are the addresses as they currently exist in the source state.
+#       module.vpc.aws_vpc.main
+#       module.eks.aws_eks_cluster.this
+#
+# -n  New names file (optional): one NEW resource address per line.
+#     Must have the exact same number of lines as -r.
+#     Line N in -n is the new name for line N in -r.
+#     If -n is omitted, every resource keeps its original name in the target.
+#       module.networking.aws_vpc.main
+#       module.kubernetes.aws_eks_cluster.this
+# =============================================================================
+
+# Exit immediately on any error, treat unset variables as errors,
+# and propagate pipe failures (so a failed left side of | is not silently ignored)
+set -euo pipefail
+
+# =============================================================================
+# COLORS — ANSI escape codes for colored terminal output
+# =============================================================================
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+CYAN='\033[0;36m'
+BOLD='\033[1m'
+RESET='\033[0m'
+
+# =============================================================================
+# LOGGING HELPERS
+# =============================================================================
+
+log_step()   { echo -e "\n${BOLD}${BLUE}════════════════════════════════════════════════════════════════════════${RESET}"; \
+               echo -e "${BOLD}${BLUE}  STEP $1: $2${RESET}"; \
+               echo -e "${BOLD}${BLUE}════════════════════════════════════════════════════════════════════════${RESET}"; }
+log_info()   { echo -e "${CYAN}[INFO]${RESET}  $*"; }
+log_ok()     { echo -e "${GREEN}[OK]${RESET}    $*"; }
+log_warn()   { echo -e "\n"; echo -e "${YELLOW}[WARN]${RESET}  $*\n"; }
+log_error()  { echo -e "\n"; echo -e "${RED}[ERROR]${RESET} $*\n" >&2; }
+log_detail() { echo -e "        ${CYAN}→${RESET} $*"; }
+
+die()        { log_error "$*"; exit 1; }
+
+require_cmd() {
+  command -v "$1" &>/dev/null || die "'$1' is not installed or not in PATH."
+}
+
+press_enter () { 
+  echo -e "\n${YELLOW}═══════════════════════════════════════════════════════${RESET}"
+  read -rp "$(echo -e "${BOLD}Press ${YELLOW}[ENTER]${RESET} to continue or any other key to abort...${RESET}")" -n1 key
+  echo ""
+  if [[ -n "$key" ]]; then
+    log_warn "Aborted by user."
+    exit 0
+  fi 
+}
+
+# =============================================================================
+# USAGE — printed when -h flag is passed
+# =============================================================================
+
+usage() {
+  echo -e "${BOLD}Usage:${RESET}"
+  echo "  $0 -s <source_dir> -t <target_dir> -r <resources_file> [-n <new_names_file>]"
+  echo ""
+  echo -e "${BOLD}Options:${RESET}"
+  echo "  -s  Path to the SOURCE Terraform root (existing state)"
+  echo "  -t  Path to the TARGET Terraform root (new backend already configured)"
+  echo "  -r  Resources file — one OLD address per line"
+  echo "  -n  New names file — one NEW address per line, same line count as -r (optional)"
+  echo "  -h  Show this help"
+  echo ""
+  echo -e "${BOLD}Examples:${RESET}"
+  echo "  # Same-name move (no renaming)"
+  echo "  $0 -s ./infra/source -t ./infra/target -r resources.txt"
+  echo ""
+  echo "  # Move with renaming"
+  echo "  $0 -s ./infra/source -t ./infra/target -r resources.txt -n new_names.txt"
+  echo ""
+  echo -e "${BOLD}File format:${RESET}"
+  echo "  resources.txt       new_names.txt"
+  echo "  module.old.foo      module.new.foo"
+  echo "  module.old.bar      module.new.bar"
+  exit 0
+}
+
+# =============================================================================
+# ARGUMENT PARSING
+# OPTARG holds the value that follows each flag (e.g. -s /path → OPTARG=/path).
+# The leading : in ":s:t:r:n:h" suppresses getopts' own error messages
+# so we handle errors ourselves in the :) and \?) cases below.
+# =============================================================================
+
+SOURCE_DIR=""
+TARGET_DIR=""
+RESOURCE_FILE=""    # -r: old/source resource addresses, one per line
+NEW_NAMES_FILE=""   # -n: new/target resource addresses, one per line (optional)
+
+while getopts ":s:t:r:n:h" opt; do
+  case $opt in
+    s) SOURCE_DIR="$OPTARG" ;;
+    t) TARGET_DIR="$OPTARG" ;;
+    r) RESOURCE_FILE="$OPTARG" ;;
+    n) NEW_NAMES_FILE="$OPTARG" ;;
+    h) usage ;;
+    :) die "Option -$OPTARG requires an argument." ;;   # flag given but no value after it
+    \?) die "Unknown option: -$OPTARG" ;;               # completely unrecognised flag
+  esac
+done
+
+# Validate required flags
+[[ -z "$SOURCE_DIR"    ]] && die "Missing -s <source_dir>"
+[[ -z "$TARGET_DIR"    ]] && die "Missing -t <target_dir>"
+[[ -z "$RESOURCE_FILE" ]] && die "Missing -r <resources_file>"
+
+# realpath converts relative paths (e.g. ./foo) to absolute (/home/user/foo).
+# This avoids confusion when terraform uses -chdir to change its working directory.
+SOURCE_DIR="$(realpath "$SOURCE_DIR")"
+TARGET_DIR="$(realpath "$TARGET_DIR")"
+RESOURCE_FILE="$(realpath "$RESOURCE_FILE")"
+[[ -n "$NEW_NAMES_FILE" ]] && NEW_NAMES_FILE="$(realpath "$NEW_NAMES_FILE")"
+
+# Confirm all given paths actually exist on disk
+[[ -d "$SOURCE_DIR"    ]] || die "Source directory not found: $SOURCE_DIR"
+[[ -d "$TARGET_DIR"    ]] || die "Target directory not found: $TARGET_DIR"
+[[ -f "$RESOURCE_FILE" ]] || die "Resources file not found: $RESOURCE_FILE"
+[[ -n "$NEW_NAMES_FILE" && ! -f "$NEW_NAMES_FILE" ]] && die "New names file not found: $NEW_NAMES_FILE"
+
+# =============================================================================
+# TEMP STATE FILE PATHS
+# We work on local copies of the state to avoid touching the remote backend
+# until we are fully ready. The timestamp suffix avoids collisions between runs.
+# =============================================================================
+
+TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+SOURCE_STATE="/tmp/source_${TIMESTAMP}.tfstate"   # pulled backup of the original remote state
+TARGET_STATE="/tmp/target_${TIMESTAMP}.tfstate"   # new state we build locally then push
+
+# =============================================================================
+# PREREQUISITES
+# =============================================================================
+
+require_cmd terraform
+require_cmd jq   # jq parses .tfstate files, which are JSON
+
+# =============================================================================
+# BANNER
+# =============================================================================
+
+echo -e "\n${BOLD}${CYAN}╔═════════════════════════╗${RESET}"
+echo -e "${BOLD}${CYAN}║       State-Shard       ║${RESET}"
+echo -e "${BOLD}${CYAN}╚═════════════════════════╝${RESET}"
+echo ""
+log_info "Source dir      : ${BOLD}$SOURCE_DIR${RESET}"
+log_info "Target dir      : ${BOLD}$TARGET_DIR${RESET}"
+log_info "Resources file  : ${BOLD}$RESOURCE_FILE${RESET}"
+log_info "New names file  : ${BOLD}${NEW_NAMES_FILE:-"(none — same-name move)"}${RESET}"
+log_info "Source state    : ${BOLD}$SOURCE_STATE${RESET}"
+log_info "Target state    : ${BOLD}$TARGET_STATE${RESET}"
+
+# ==================================================================================== 
+# LOAD INPUT FILES INTO ARRAYS
+#
+# SRC_NAMES — addresses as they exist in the source state (from -r)
+# DST_NAMES — addresses they will have in the target state (from -n, or same as -r)
+#
+# mapfile -t reads all lines of a file/command into an array.
+#   -t strips the trailing newline from each element.
+# awk 'NF' skips blank lines: NF = number of fields; blank line → NF=0 → false → skip.
+# ====================================================================================
+
+mapfile -t SRC_NAMES < <(awk 'NF' "$RESOURCE_FILE")
+
+[[ ${#SRC_NAMES[@]} -eq 0 ]] && die "Resources file is empty: $RESOURCE_FILE"
+
+if [[ -n "$NEW_NAMES_FILE" ]]; then
+  # New names file provided — load it and validate line count matches
+  mapfile -t DST_NAMES < <(awk 'NF' "$NEW_NAMES_FILE")
+
+  # Both files must have the same number of lines so every old name has a new name
+  if [[ ${#SRC_NAMES[@]} -ne ${#DST_NAMES[@]} ]]; then
+    die "Line count mismatch: -r has ${#SRC_NAMES[@]} lines, -n has ${#DST_NAMES[@]} lines. They must be equal."
+  fi
+else
+  # No new names file — destination is the same as source for every resource
+  # We copy the source array so the rest of the script works identically either way
+  DST_NAMES=("${SRC_NAMES[@]}")
+fi
+
+TOTAL_ENTRIES=${#SRC_NAMES[@]}
+
+# =============================================================================
+# PRINT MIGRATION PLAN — show exactly what will happen before anything runs
+# =============================================================================
+
+echo ""
+log_info "Resources to migrate (${TOTAL_ENTRIES} total):"
+
+for (( i=0; i<TOTAL_ENTRIES; i++ )); do
+  if [[ "${SRC_NAMES[$i]}" == "${DST_NAMES[$i]}" ]]; then
+    log_detail "${GREEN}${SRC_NAMES[$i]}${RESET}"
+  else
+    # Show old → new when names differ
+    log_detail "${RED}${SRC_NAMES[$i]}${RESET}  ${YELLOW}→${RESET}  ${GREEN}${DST_NAMES[$i]}${RESET}"
+  fi
+done
+
+press_enter
+
+# =============================================================================
+# STEP 1 — Pre-flight confirmation
+# =============================================================================
+
+log_step 1 "Pre-flight confirmation"
+
+echo ""
+echo -e "${YELLOW}${BOLD}⚠  ACTION REQUIRED${RESET}"
+echo -e "   Make sure you have already:"
+echo -e "   ${BOLD}1.${RESET} You have already initialized ${CYAN}source${RESET} and ${CYAN}target${RESET} directories:"
+echo -e "   ${BOLD}2.${RESET} Added all resource/module configurations to that config"
+echo ""
+
+# read -rp: -r = raw input (no backslash processing), -p = inline prompt string
+echo -e "${YELLOW}═══════════════════════════════════════════════════════${RESET}"
+read -rp "$(echo -e "${YELLOW}[QUESTION] ${RESET}${BOLD}Have you done all of the above? [yes/no]: ${RESET}")" CONFIRM_BACKEND
+
+if [[ "$CONFIRM_BACKEND" != "yes" ]]; then
+  echo ""
+  log_warn "Aborted. Please set up the target config, then re-run."
+  exit 0
+fi
+
+# =============================================================================
+# STEP 2 — Pull source and target states and create backup
+# =============================================================================
+log_step 2 "Pull source and target states and create backup"
+
+# Target
+log_info "Running: ${GREEN}terraform -chdir=\"$TARGET_DIR\" state pull${RESET}"
+
+if terraform -chdir="$TARGET_DIR" state pull > "$TARGET_STATE"; then
+  TARGET_STATE_SIZE=$(wc -c < "$TARGET_STATE")
+  log_ok "Target state pulled -> ${CYAN}$TARGET_STATE${RESET} (${TARGET_STATE_SIZE} bytes)"
+else
+  die "Failed to pull target state from: $TARGET_DIR"
+fi
+
+# Count resource blocks in the source state (for information only)
+TOTAL_IN_TARGET=$(jq '.resources | length' "$TARGET_STATE")
+log_info "Total resource blocks in target state: ${CYAN}$TOTAL_IN_TARGET${RESET}"
+
+cp "$TARGET_STATE" "${TARGET_STATE}.bak"
+log_ok "Backup created: ${CYAN}${TARGET_STATE}.bak${RESET}"
+
+
+# Source
+log_info "Running: ${GREEN}terraform -chdir=\"$SOURCE_DIR\" state pull${RESET}"
+
+if terraform -chdir="$SOURCE_DIR" state pull > "$SOURCE_STATE"; then
+  SOURCE_STATE_SIZE=$(wc -c < "$SOURCE_STATE")
+  log_ok "Source state pulled -> ${CYAN}$SOURCE_STATE${RESET} (${SOURCE_STATE_SIZE} bytes)"
+else
+  die "Failed to pull target state from: $SOURCE_DIR"
+fi
+
+# Count resource blocks in the source state (for information only)
+TOTAL_IN_SOURCE=$(jq '.resources | length' "$SOURCE_STATE")
+log_info "Total resource blocks in source state: ${CYAN}$TOTAL_IN_SOURCE${RESET}"
+
+cp "$SOURCE_STATE" "${SOURCE_STATE}.bak"
+log_ok "Backup created: ${CYAN}${SOURCE_STATE}.bak${RESET}"
+
+# =============================================================================
+# STEP 3 — Move resources: source.tfstate → target.tfstate (local files only)
+# =============================================================================
+
+log_step 3 "Move resources from source state to target state (local files)"
+
+press_enter
+
+MOVE_OK=0
+MOVE_FAIL=0
+FAILED_RESOURCES=()
+
+
+# Internal helper: run terraform state mv between the two local .tfstate files.
+# $1 = source address (must exist in SOURCE_STATE)
+# $2 = destination address (will be written into TARGET_STATE)
+_state_mv() {
+  local src_names="$1" dst_names="$2"
+  terraform \
+    -chdir="$SOURCE_DIR" \
+    state mv \
+    -state="$SOURCE_STATE" \
+    -state-out="$TARGET_STATE" \
+    "$src_names" "$dst_names" \
+    2>&1 | while IFS= read -r line; do
+      log_detail "$line"
+    done
+}
+# 2>&1 | while IFS= read -r line; do          #   take all terraform output (both normal and errors)
+#       log_detail "$line"                    #   → feed it into a loop
+#     done                                    #   → print each line with our own formatting
+
+# Loop by index so we always have both SRC_NAMES[i] and DST_NAMES[i] together
+for (( i=0; i<TOTAL_ENTRIES; i++ )); do
+  src="${SRC_NAMES[$i]}"
+  dst="${DST_NAMES[$i]}"
+
+  if [[ "$src" == "$dst" ]]; then
+    log_info "Moving: ${BOLD}$src${RESET}"
+  else
+    log_info "Moving with rename: ${BOLD}$src${RESET}  ${YELLOW}→${RESET}  ${BOLD}$dst${RESET}"
+  fi
+
+  if _state_mv "$src" "$dst"; then
+    log_ok "Moved: $src"
+    (( MOVE_OK++ )) || true   # "|| true" prevents set -e from exiting when arithmetic result is 0
+  else
+    log_warn "FAILED to move: $src"
+    FAILED_RESOURCES+=("$src")
+    (( MOVE_FAIL++ )) || true
+  fi
+done
+
+echo ""
+log_info "Move summary: ${GREEN}${MOVE_OK} SUCCESSED${RESET}, ${RED}${MOVE_FAIL} FAILED${RESET}"
+
+# Abort if anything failed — never push a partial or inconsistent state
+if [[ ${#FAILED_RESOURCES[@]} -gt 0 ]]; then
+  log_warn "FAILED resources:"
+  for r in "${FAILED_RESOURCES[@]}"; do
+    log_detail "${RED}$r${RESET}"
+  done
+  die "Some resources FAILED to move. Aborting to prevent state corruption."
+fi
+
+# =============================================================================
+# STEP 4 — Show target state contents for visual verification
+# =============================================================================
+
+log_step 4 "Visual verification of target state"
+
+if terraform state list -state="$SOURCE_STATE" > "source_list_${TIMESTAMP}"; then 
+  log_ok "Saved ${CYAN}source${RESET} state list to ${CYAN}source_list_${TIMESTAMP}${RESET}"
+else
+  die "Failed to save state list to ${CYAN}source_list_${TIMESTAMP}${RESET}"
+fi
+
+if terraform state list -state="${TARGET_STATE}" > "target_list_${TIMESTAMP}"; then 
+  log_ok "Saved ${CYAN}target${RESET} state list to ${CYAN}target_list_${TIMESTAMP}${RESET}"
+else
+  die "Failed to save state list to ${CYAN}target_list_${TIMESTAMP}${RESET}"
+fi
+
+log_info "Current resources in local ${CYAN}target${RESET} state:"
+echo ""
+echo -e "${CYAN}===========================${RESET}"
+echo ""
+
+cat "target_list_${TIMESTAMP}"
+
+echo -e "\n${YELLOW}[CHECK]${RESET} Review the list above."
+
+press_enter
+
+# =============================================================================
+# STEP 5 — Push local target state to the new remote backend, then verify
+# =============================================================================
+
+log_step 5 "Push moved states to backend"
+
+echo -e "${YELLOW}${BOLD}⚠  WARNING${RESET}"
+echo -e "   ${CYAN}${SOURCE_STATE}${RESET} and ${CYAN}${TARGET_STATE}${RESET} will be pushed to backend:"
+
+echo ""
+read -rp "$(echo -e "${BOLD}${RED}Do you want to continue? [yes/no]: ${RESET}")" CONFIRM_RM
+
+if [[ "$CONFIRM_RM" != "yes" ]]; then
+  echo ""
+  log_warn "Push cancelled by user."
+  log_warn "The states were NOT pushed — remote source backends is unchanged."
+  exit 0
+fi
+
+log_info "Running: ${GREEN}terraform -chdir=\"$TARGET_DIR\" state push \"$TARGET_STATE\"${RESET}"
+
+if terraform -chdir="$TARGET_DIR" state push "$TARGET_STATE"; then
+  log_ok "State pushed to ${CYAN}target${RESET} backend successfully."
+else
+  die "terraform state push failed. ${CYAN}Target${RESET} remote state was NOT modified."
+fi
+
+log_info "Running: ${GREEN}terraform -chdir=\"$SOURCE_DIR\" state push \"$SOURCE_STATE\"${RESET}"
+
+if terraform -chdir="$SOURCE_DIR" state push "$SOURCE_STATE"; then
+  log_ok "State pushed to ${CYAN}source${RESET} backend successfully."
+else
+  die "terraform state push failed. ${CYAN}Source${RESET} remote state was NOT modified."
+fi
+
+
+# =============================================================================
+# DONE
+# =============================================================================
+echo ""
+echo -e "${BOLD}${GREEN}╔══════════════════════════════════════════════╗${RESET}"
+echo -e "${BOLD}${GREEN}║         Migration Completed Successfully     ║${RESET}"
+echo -e "${BOLD}${GREEN}╚══════════════════════════════════════════════╝${RESET}"
+echo ""
+log_info "Source state backup (before move) : ${BOLD}${SOURCE_STATE}.bak${RESET}"
+log_info "Target state backup (before move) : ${BOLD}${TARGET_STATE}.bak${RESET}"
+log_info "Resources migrated  : ${BOLD}${TOTAL_ENTRIES}${RESET}"
+echo ""
+log_ok "Done. Verify your infrastructure with ${GREEN}'terraform plan'${RESET} in both roots before continuing."

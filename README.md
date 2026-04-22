@@ -193,17 +193,23 @@ The script pauses at every major step and waits for you to press `[ENTER]` befor
 
 ## Backups
 
-Before any modification, the script saves local backups of both states:
+Before any modification, the script saves local backups of both states in the directory where you run the script:
 
 ```
-/tmp/source_TIMESTAMP.tfstate.bak   ← original source state
-/tmp/target_TIMESTAMP.tfstate.bak   ← original target state
+./source_TIMESTAMP.tfstate.bak   ← original source state
+./target_TIMESTAMP.tfstate.bak   ← original target state
+```
+
+The state list snapshots are also saved in the same directory:
+```
+./source_list_TIMESTAMP   ← source resources after move
+./target_list_TIMESTAMP   ← target resources after move
 ```
 
 If something goes wrong after the push, you can restore either state manually:
 ```bash
-terraform -chdir=./source state push /tmp/source_TIMESTAMP.tfstate.bak
-terraform -chdir=./target state push /tmp/target_TIMESTAMP.tfstate.bak
+terraform -chdir=./source state push ./source_TIMESTAMP.tfstate.bak
+terraform -chdir=./target state push ./target_TIMESTAMP.tfstate.bak
 ```
 
 ---

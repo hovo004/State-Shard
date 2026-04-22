@@ -148,10 +148,14 @@ RESOURCE_FILE="$(realpath "$RESOURCE_FILE")"
 # until we are fully ready. The timestamp suffix avoids collisions between runs.
 # =============================================================================
 
-TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
-SOURCE_STATE="/tmp/source_${TIMESTAMP}.tfstate"   # pulled backup of the original remote state
-TARGET_STATE="/tmp/target_${TIMESTAMP}.tfstate"   # new state we build locally then push
+# TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+# SOURCE_STATE="/tmp/source_${TIMESTAMP}.tfstate"   # pulled backup of the original remote state
+# TARGET_STATE="/tmp/target_${TIMESTAMP}.tfstate"   # new state we build locally then push
 
+TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
+WORK_DIR="$(pwd)"
+SOURCE_STATE="${WORK_DIR}/source_${TIMESTAMP}.tfstate"
+TARGET_STATE="${WORK_DIR}/target_${TIMESTAMP}.tfstate"
 # =============================================================================
 # PREREQUISITES
 # =============================================================================
@@ -429,3 +433,4 @@ log_info "Target state backup (before move) : ${BOLD}${TARGET_STATE}.bak${RESET}
 log_info "Resources migrated  : ${BOLD}${TOTAL_ENTRIES}${RESET}"
 echo ""
 log_ok "Done. Verify your infrastructure with ${GREEN}'terraform plan'${RESET} in both roots before continuing."
+

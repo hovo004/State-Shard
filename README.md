@@ -28,7 +28,7 @@ Remote backend (source)          Remote backend (target)
         │                                  │
         │  state pull                      │  state pull
         ▼                                  ▼
-/tmp/source_TIMESTAMP.tfstate    /tmp/target_TIMESTAMP.tfstate
+./source_TIMESTAMP.tfstate       ./target_TIMESTAMP.tfstate
         │                                  │
         │         state mv (local)         │
         └──────── moves resources ────────▶│

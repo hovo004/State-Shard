@@ -434,3 +434,5 @@ log_info "Resources migrated  : ${BOLD}${TOTAL_ENTRIES}${RESET}"
 echo ""
 log_ok "Done. Verify your infrastructure with ${GREEN}'terraform plan'${RESET} in both roots before continuing."
 
+# Every move command creates backup, we don't need it, we already have original .bak states
+rm *.backup 

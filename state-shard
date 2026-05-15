@@ -311,6 +311,8 @@ _state_mv() {
   terraform \
     -chdir="$SOURCE_DIR" \
     state mv \
+    -lock=false \
+    -backup=- \
     -state="$SOURCE_STATE" \
     -state-out="$TARGET_STATE" \
     "$src_names" "$dst_names" \
@@ -334,8 +336,9 @@ for (( i=0; i<TOTAL_ENTRIES; i++ )); do
   fi
 
   if _state_mv "$src" "$dst"; then
-    log_ok "Moved: $src"
+    log_ok "${GREEN}$((i+1))/$TOTAL_ENTRIES${RESET} Moved: $src"
     (( MOVE_OK++ )) || true   # "|| true" prevents set -e from exiting when arithmetic result is 0
+    rm -f "$SOURCE_STATE"*.backup "$TARGET_STATE"*.backup
   else
     log_warn "FAILED to move: $src"
     FAILED_RESOURCES+=("$src")
@@ -356,31 +359,24 @@ if [[ ${#FAILED_RESOURCES[@]} -gt 0 ]]; then
 fi
 
 # =============================================================================
-# STEP 4 — Show target state contents for visual verification
+# STEP 4 — States by list
 # =============================================================================
 
-log_step 4 "Visual verification of target state"
+log_step 4 "States by list"
 
-if terraform state list -state="$SOURCE_STATE" > "source_list_${TIMESTAMP}"; then 
-  log_ok "Saved ${CYAN}source${RESET} state list to ${CYAN}source_list_${TIMESTAMP}${RESET}"
+if terraform state list -state="$SOURCE_STATE" > "source_list_${TIMESTAMP}.txt"; then 
+  log_ok "Saved ${CYAN}source${RESET} state list to ${CYAN}source_list_${TIMESTAMP}.txt${RESET}"
 else
   die "Failed to save state list to ${CYAN}source_list_${TIMESTAMP}${RESET}"
 fi
 
-if terraform state list -state="${TARGET_STATE}" > "target_list_${TIMESTAMP}"; then 
-  log_ok "Saved ${CYAN}target${RESET} state list to ${CYAN}target_list_${TIMESTAMP}${RESET}"
+if terraform state list -state="${TARGET_STATE}" > "target_list_${TIMESTAMP}.txt"; then 
+  log_ok "Saved ${CYAN}target${RESET} state list to ${CYAN}target_list_${TIMESTAMP}.txt${RESET}"
 else
   die "Failed to save state list to ${CYAN}target_list_${TIMESTAMP}${RESET}"
 fi
 
-log_info "Current resources in local ${CYAN}target${RESET} state:"
 echo ""
-echo -e "${CYAN}===========================${RESET}"
-echo ""
-
-cat "target_list_${TIMESTAMP}"
-
-echo -e "\n${YELLOW}[CHECK]${RESET} Review the list above."
 
 press_enter
 
@@ -394,7 +390,7 @@ echo -e "${YELLOW}${BOLD}⚠  WARNING${RESET}"
 echo -e "   ${CYAN}${SOURCE_STATE}${RESET} and ${CYAN}${TARGET_STATE}${RESET} will be pushed to backend:"
 
 echo ""
-read -rp "$(echo -e "${BOLD}${RED}Do you want to continue? [yes/no]: ${RESET}")" CONFIRM_RM
+read -rp "$(echo -e "${BOLD}${YELLOW}Do you want to continue? [yes/no]: ${RESET}")" CONFIRM_RM
 
 if [[ "$CONFIRM_RM" != "yes" ]]; then
   echo ""
@@ -433,6 +429,3 @@ log_info "Target state backup (before move) : ${BOLD}${TARGET_STATE}.bak${RESET}
 log_info "Resources migrated  : ${BOLD}${TOTAL_ENTRIES}${RESET}"
 echo ""
 log_ok "Done. Verify your infrastructure with ${GREEN}'terraform plan'${RESET} in both roots before continuing."
-
-# Every move command creates backup, we don't need it, we already have original .bak states
-rm *.backup 

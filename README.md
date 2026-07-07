@@ -110,9 +110,9 @@ state-shard -h
 
 ## Requirements
 
-- `bash` 5+ — the script uses `mapfile` which requires bash 4+
+- `bash` 4+ — the script uses `mapfile`, which requires bash 4+
   - **macOS:** default bash is 3.2 — install a newer version via Homebrew: `brew install bash`
-  - **Linux:** bash 5+ is typically already available at `/bin/bash` or `/usr/bin/bash`
+  - **Linux:** bash 4+ is typically already available at `/bin/bash` or `/usr/bin/bash`
   - The script uses `#!/usr/bin/env bash` which automatically finds the correct bash in your `PATH` on any system
 - `terraform`
 - `jq`
@@ -184,7 +184,7 @@ If `-n` is omitted, every resource keeps its original address in the target stat
 | **Step 1** | Confirms you have set up the target config and run `terraform init` |
 | **Step 2** | Pulls both source and target states to local files and creates `.bak` backups |
 | **Step 3** | Moves resources between the local state files using `terraform state mv` |
-| **Step 4** | Shows you the target state list for visual review — pauses for your confirmation |
+| **Step 4** | Saves the source and target state lists to `.txt` files for review — pauses for your confirmation |
 | **Step 5** | Pushes both modified states back to their remote backends |
 
 The script pauses at every major step and waits for you to press `[ENTER]` before continuing. You can abort at any point before the push.
@@ -200,10 +200,10 @@ Before any modification, the script saves local backups of both states in the di
 ./target_TIMESTAMP.tfstate.bak   ← original target state
 ```
 
-The state list snapshots are also saved in the same directory:
+The state list snapshots (from Step 4) are also saved in the same directory:
 ```
-./source_list_TIMESTAMP   ← source resources after move
-./target_list_TIMESTAMP   ← target resources after move
+./source_list_TIMESTAMP.txt   ← source resources after move
+./target_list_TIMESTAMP.txt   ← target resources after move
 ```
 
 If something goes wrong after the push, you can restore either state manually:

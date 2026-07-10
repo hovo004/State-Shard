@@ -224,3 +224,5 @@ terraform -chdir=./target plan
 ```
 
 Both should show **No changes** if the resource configurations in both modules match the migrated state entries.
+
+** Feel free to create a pull request if you see any bugs or issues, or want to suggest an improvement. **

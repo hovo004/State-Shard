@@ -243,6 +243,8 @@ module.apply_topic.kubernetes_manifest.apply_topic["test-topic-1-new"]
 
 If `-n` is omitted, every resource keeps its original address in the target state.
 
+> 💡 **Tip:** For `for_each`/`count` resources, run `terraform state list` on the source and copy the addresses exactly as shown (including the `["key"]` or `[index]` suffix) — no special handling needed.
+
 ---
 
 ## What the Script Does — Step by Step
@@ -335,7 +337,6 @@ Both should show **No changes** if the resource configurations in both modules m
 ## Limitations
 
 - The script moves state entries only — it does not modify your `.tf` configuration files. You are responsible for having matching resource/module blocks in the target root before running it.
-- Indexed resources (`for_each` / `count`, e.g. `kubernetes_manifest.apply_topic["test-topic-1"]`) are supported and have been used in real migrations — just make sure you list the exact index/key as it appears in `terraform state list` in the `-r` file (and in `-n` if renaming).
 - Cross-workspace migrations (Terraform Cloud/Enterprise workspaces) have not been extensively tested — verify carefully with `terraform plan` after migrating.
 - The script assumes both source and target backends are reachable and that you have valid credentials/auth configured locally for both.
 - Large state files may take noticeably longer during the `state pull`/`state push` steps, depending on your backend.

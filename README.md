@@ -1,8 +1,35 @@
 # state-shard
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Bash](https://img.shields.io/badge/bash-4%2B-4EAA25?logo=gnu-bash&logoColor=white)](#requirements)
+[![Terraform](https://img.shields.io/badge/terraform-required-844FBA?logo=terraform&logoColor=white)](#requirements)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](./CONTRIBUTING.md)
+
 > Created by **Hovhannes Hovhannisyan**
 
 A bash script to safely migrate Terraform resources from one remote state to another — without using `import` blocks or manual `terraform state mv` commands.
+
+> ⚠️ **This script mutates remote Terraform state.** Always test on a non-production state first, and keep the backups it creates until you've confirmed the migration with `terraform plan`.
+
+---
+
+## Table of Contents
+
+- [The Problem](#the-problem)
+  - [Real-world example](#real-world-example)
+- [How It Works](#how-it-works)
+- [Prerequisites](#prerequisites)
+- [Installation](#installation)
+- [Usage](#usage)
+  - [Flags](#flags)
+- [Input File Format](#input-file-format)
+- [What the Script Does — Step by Step](#what-the-script-does--step-by-step)
+- [Example Run](#example-run)
+- [Backups](#backups)
+- [After the Migration](#after-the-migration)
+- [Limitations](#limitations)
+- [Contributing](#contributing)
+- [License](#license)
 
 ---
 
@@ -78,11 +105,20 @@ source backend (resources gone)  target backend (resources added)
 
 ---
 
-## Before You Run
+## Prerequisites
 
-You must do these two things manually before running the script:
+Before running the script, make sure the following are in place.
 
-**1. Set up the target Terraform root**
+### 1. Tooling
+
+- `bash` 4+ — the script uses `mapfile`, which requires bash 4+
+  - **macOS:** default bash is 3.2 — install a newer version via Homebrew: `brew install bash`
+  - **Linux:** bash 4+ is typically already available at `/bin/bash` or `/usr/bin/bash`
+  - The script uses `#!/usr/bin/env bash` which automatically finds the correct bash in your `PATH` on any system
+- `terraform`
+- `jq`
+
+### 2. Set up the target Terraform root
 
 Add a backend block to your target module pointing to a new state. The tool works with any Terraform-supported backend. Examples:
 
@@ -117,7 +153,7 @@ cd ./target
 terraform init
 ```
 
-**2. Write your resource configurations**
+### 3. Write your resource configurations
 
 The script does not run `terraform plan` or `terraform apply`. It only moves state entries. Make sure your target module already has the resource/module configurations declared — after migration, `terraform plan` in both roots should show **No changes**, because the state and the configuration will be in sync.
 
@@ -144,16 +180,11 @@ After installation, run from anywhere:
 state-shard -h
 ```
 
----
+### Uninstall
 
-## Requirements
-
-- `bash` 4+ — the script uses `mapfile`, which requires bash 4+
-  - **macOS:** default bash is 3.2 — install a newer version via Homebrew: `brew install bash`
-  - **Linux:** bash 4+ is typically already available at `/bin/bash` or `/usr/bin/bash`
-  - The script uses `#!/usr/bin/env bash` which automatically finds the correct bash in your `PATH` on any system
-- `terraform`
-- `jq`
+```bash
+sudo rm /usr/local/bin/state-shard
+```
 
 ---
 
@@ -229,6 +260,42 @@ The script pauses at every major step and waits for you to press `[ENTER]` befor
 
 ---
 
+## Example Run
+
+A typical interactive session looks like this:
+
+```text
+$ state-shard -s ./source -t ./target -r resources.txt
+
+Migration plan:
+  Source: ./source
+  Target: ./target
+  Resources to move: 3
+
+Press [ENTER] to continue, or Ctrl+C to abort...
+
+[Step 1] Confirm target is initialised (terraform init has been run)? [y/N]: y
+[Step 2] Pulling source state...        done
+          Pulling target state...        done
+          Backups saved:
+            ./source_20260712153000.tfstate.bak
+            ./target_20260712153000.tfstate.bak
+[Step 3] Moving resources...
+          module.vpc.aws_vpc.main -> module.networking.aws_vpc.main   OK
+          (2 more...)                                                 OK
+[Step 4] State lists saved for review:
+            ./source_list_20260712153000.txt
+            ./target_list_20260712153000.txt
+          Review the files above. Press [ENTER] to push, or Ctrl+C to abort...
+
+[Step 5] Pushing source state...        done
+          Pushing target state...        done
+
+Migration complete. Run `terraform plan` in both roots to verify.
+```
+
+---
+
 ## Backups
 
 Before any modification, the script saves local backups of both states in the directory where you run the script:
@@ -263,4 +330,24 @@ terraform -chdir=./target plan
 
 Both should show **No changes** if the resource configurations in both modules match the migrated state entries.
 
-**Feel free to create a pull request if you see any bugs or issues, or want to suggest an improvement.**
+---
+
+## Limitations
+
+- The script moves state entries only — it does not modify your `.tf` configuration files. You are responsible for having matching resource/module blocks in the target root before running it.
+- Indexed resources (`for_each` / `count`, e.g. `kubernetes_manifest.apply_topic["test-topic-1"]`) must be listed with their exact index in the `-r` file.
+- Cross-workspace migrations (Terraform Cloud/Enterprise workspaces) have not been extensively tested — verify carefully with `terraform plan` after migrating.
+- The script assumes both source and target backends are reachable and that you have valid credentials/auth configured locally for both.
+- Large state files may take noticeably longer during the `state pull`/`state push` steps, depending on your backend.
+
+---
+
+## Contributing
+
+Bug reports, feature requests, and pull requests are welcome — see [CONTRIBUTING.md](./CONTRIBUTING.md) for guidelines before submitting.
+
+---
+
+## License
+
+Licensed under the [MIT License](./LICENSE).

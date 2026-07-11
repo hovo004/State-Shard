@@ -6,14 +6,52 @@ A bash script to safely migrate Terraform resources from one remote state to ano
 
 ---
 
-## Why This Script?
+## The Problem
 
-When you have a large Terraform state file and want to split it, the standard approach is painful:
-- Writing `import` blocks requires knowing every resource's import ID
-- Running `terraform state mv` manually for dozens of resources is error-prone
-- One mistake can corrupt your state
+As infrastructure grows, teams often end up with a single, monolithic Terraform state managing everything — sometimes thousands of resources in one module. This creates real pain:
 
-This script lets you simply provide a list of resource addresses, and it handles everything — pulling, moving, verifying, and pushing — safely and interactively.
+- **Slow `plan`/`apply`** — Terraform has to load and compare the *entire* state, even when only a handful of resources actually changed.
+- **Long CI/CD pipelines** — every pipeline run pays the cost of the full state, regardless of what was touched.
+- **Poor isolation** — services and environments are tangled together in one state, making ownership and blast-radius control harder than it should be.
+
+The fix is well known: split the state by service and/or environment, so each module only manages the resources it actually owns. The tricky part is *migrating* the existing resources into the new states without breaking anything.
+
+That migration is normally painful:
+- Writing `import` blocks requires knowing every resource's import ID.
+- Running `terraform state mv` manually for dozens (or hundreds) of resources is slow and error-prone.
+- One mistake in the process can corrupt your state.
+
+**state-shard** solves this: you provide a list of resource addresses, and it handles pulling, moving, verifying, and pushing the states for you — safely and interactively, pausing for your confirmation at every major step.
+
+### Real-world example
+
+One real migration looked like this:
+
+**Before** — a single module managing everything:
+```text
+all-vms-conf/
+└── main.tf
+```
+This module contained **1,700+ Terraform resources**. Every `plan` and `apply` became increasingly slow, since Terraform had to process the full state even for a tiny change.
+
+**After** — split by service and environment:
+```text
+mongo-vms/
+├── dev/main.tf
+├── stage/main.tf
+└── prod/main.tf
+postgres-vms/
+├── dev/main.tf
+├── stage/main.tf
+└── prod/main.tf
+redis-vms/
+├── dev/main.tf
+├── stage/main.tf
+└── prod/main.tf
+```
+Each module now owns its own state. state-shard was used to move the relevant resources out of the original 1,700+ resource state into each of the new, smaller states.
+
+**Result:** CI/CD pipeline execution time dropped by roughly **3–4×**, since each pipeline now only processes the state for the affected service and environment — plus smaller state files, better isolation, and easier ownership overall.
 
 ---
 

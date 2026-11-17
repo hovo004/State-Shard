@@ -25,6 +25,21 @@
 #       module.networking.aws_vpc.main
 #       module.kubernetes.aws_eks_cluster.this
 # =============================================================================
+# BASH VERSION GUARD — require bash 5+ (macOS ships bash 3.2 at /bin/bash).
+# If started with an older bash, re-exec with a newer one when available:
+#   Apple Silicon Homebrew (/opt/homebrew), Intel Homebrew (/usr/local), or PATH.
+# Kept bash-3.2 compatible on purpose — it runs before the version check passes.
+# =============================================================================
+if [ -z "${BASH_VERSINFO:-}" ] || [ "${BASH_VERSINFO[0]}" -lt 5 ]; then
+  for _bash in /opt/homebrew/bin/bash /usr/local/bin/bash $(type -ap bash 2>/dev/null || true); do
+    [ -x "$_bash" ] || continue
+    if "$_bash" -c '[ "${BASH_VERSINFO[0]}" -ge 5 ]' 2>/dev/null; then
+      exec "$_bash" "$0" "$@"
+    fi
+  done
+  echo "[ERROR] bash 5+ is required (current: ${BASH_VERSION:-unknown}). Install it: brew install bash" >&2
+  exit 1
+fi
 
 # Exit immediately on any error, treat unset variables as errors,
 # and propagate pipe failures (so a failed left side of | is not silently ignored)
